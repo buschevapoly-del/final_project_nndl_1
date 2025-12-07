@@ -1,335 +1,272 @@
-// gru.js
+// app.js
 /**
- * GRU-based model for S&P 500 returns prediction
- * All training happens client-side in the browser
+ * Main application controller
+ * Handles UI, data loading, and visualization
  */
 
-class GRUModel {
+import { GRUModel } from './gru.js';
+
+class SP500Predictor {
     constructor() {
-        this.model = null;
-        this.history = {
-            loss: [],
-            val_loss: [],
-            epochs: []
+        this.model = new GRUModel();
+        this.data = null;
+        this.normalizedReturns = null;
+        this.sequences = null;
+        this.trainData = null;
+        this.valData = null;
+        this.testData = null;
+        this.predictions = null;
+        this.currentPredictions = null;
+        
+        // UI elements
+        this.ui = {
+            fileInput: document.getElementById('fileInput'),
+            uploadContainer: document.getElementById('uploadContainer'),
+            trainBtn: document.getElementById('trainBtn'),
+            generateBtn: document.getElementById('generateBtn'),
+            predictBtn: document.getElementById('predictBtn'),
+            seqLength: document.getElementById('seqLength'),
+            trainRatio: document.getElementById('trainRatio'),
+            gruUnits: document.getElementById('gruUnits'),
+            epochs: document.getElementById('epochs'),
+            progressContainer: document.getElementById('progressContainer'),
+            progressFill: document.getElementById('progressFill'),
+            progressText: document.getElementById('progressText'),
+            status: document.getElementById('status'),
+            error: document.getElementById('error'),
+            trainLoss: document.getElementById('trainLoss'),
+            valLoss: document.getElementById('valLoss'),
+            trainSamples: document.getElementById('trainSamples'),
+            valSamples: document.getElementById('valSamples'),
+            archSeqLength: document.getElementById('archSeqLength'),
+            archGruUnits: document.getElementById('archGruUnits'),
+            predictionCards: document.getElementById('predictionCards'),
+            lossPlot: document.getElementById('lossPlot'),
+            predictionPlot: document.getElementById('predictionPlot')
         };
-        this.isTraining = false;
-        this.dataStats = {
-            mean: 0,
-            std: 1,
-            min: 0,
-            max: 1
-        };
+        
+        this.init();
     }
 
     /**
-     * Build the GRU model architecture
-     * @param {number} sequenceLength - Length of input sequences
-     * @param {number} gruUnits - Number of units in GRU layer
-     * @returns {tf.LayersModel} Compiled model
+     * Initialize the application
      */
-    buildModel(sequenceLength = 20, gruUnits = 50) {
-        // Clear any existing model from memory
-        if (this.model) {
-            this.model.dispose();
-        }
+    init() {
+        this.bindEvents();
+        this.updateArchitectureDisplay();
+        this.showStatus('Ready to load or generate data', 'info');
+    }
 
-        const model = tf.sequential();
-        
-        // GRU layer for sequence processing
-        model.add(tf.layers.gru({
-            units: gruUnits,
-            inputShape: [sequenceLength, 1],
-            activation: 'tanh',
-            returnSequences: false,
-            kernelInitializer: 'glorotNormal'
-        }));
-        
-        // Dropout for regularization
-        model.add(tf.layers.dropout({rate: 0.2}));
-        
-        // Output layer for return prediction
-        model.add(tf.layers.dense({
-            units: 1,
-            activation: 'linear'
-        }));
-        
-        // Compile model with Adam optimizer and MSE loss
-        model.compile({
-            optimizer: tf.train.adam(0.001),
-            loss: 'meanSquaredError',
-            metrics: ['mse']
+    /**
+     * Bind event listeners to UI elements
+     */
+    bindEvents() {
+        // File upload
+        this.ui.fileInput.addEventListener('change', (e) => this.handleFileUpload(e));
+        this.ui.uploadContainer.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            this.ui.uploadContainer.style.borderColor = '#ff2e63';
         });
-        
-        this.model = model;
-        return model;
+        this.ui.uploadContainer.addEventListener('dragleave', () => {
+            this.ui.uploadContainer.style.borderColor = '#333333';
+        });
+        this.ui.uploadContainer.addEventListener('drop', (e) => {
+            e.preventDefault();
+            this.ui.uploadContainer.style.borderColor = '#333333';
+            if (e.dataTransfer.files.length) {
+                this.ui.fileInput.files = e.dataTransfer.files;
+                this.handleFileUpload(e);
+            }
+        });
+
+        // Buttons
+        this.ui.trainBtn.addEventListener('click', () => this.trainModel());
+        this.ui.generateBtn.addEventListener('click', () => this.generateData());
+        this.ui.predictBtn.addEventListener('click', () => this.predictNextDays());
+
+        // Parameter changes
+        this.ui.seqLength.addEventListener('change', () => this.updateArchitectureDisplay());
+        this.ui.gruUnits.addEventListener('change', () => this.updateArchitectureDisplay());
     }
 
     /**
-     * Prepare sequences from returns data
-     * @param {Array} returns - Array of daily returns
-     * @param {number} sequenceLength - Length of each sequence
-     * @returns {Object} X and y tensors
+     * Update architecture display based on parameters
      */
-    createSequences(returns, sequenceLength) {
-        const xs = [];
-        const ys = [];
-        
-        for (let i = 0; i < returns.length - sequenceLength; i++) {
-            const sequence = returns.slice(i, i + sequenceLength);
-            const target = returns[i + sequenceLength];
-            
-            xs.push(sequence);
-            ys.push(target);
-        }
-        
-        // Convert to tensors with proper shape [samples, sequenceLength, features]
-        const xTensor = tf.tensor3d(xs, [xs.length, sequenceLength, 1]);
-        const yTensor = tf.tensor2d(ys, [ys.length, 1]);
-        
-        return { xs: xTensor, ys: yTensor };
+    updateArchitectureDisplay() {
+        this.ui.archSeqLength.textContent = this.ui.seqLength.value;
+        this.ui.archGruUnits.textContent = this.ui.gruUnits.value;
     }
 
     /**
-     * Normalize data using z-score normalization
-     * @param {Array} data - Data to normalize
-     * @returns {Object} Normalized data and statistics
+     * Handle CSV file upload
      */
-    normalizeData(data) {
-        const mean = tf.mean(data).dataSync()[0];
-        const std = tf.moments(data).variance.sqrt().dataSync()[0];
-        const min = tf.min(data).dataSync()[0];
-        const max = tf.max(data).dataSync()[0];
-        
-        // Avoid division by zero
-        const safeStd = std === 0 ? 1 : std;
-        
-        const normalized = tf.sub(data, mean).div(safeStd);
-        
-        this.dataStats = { mean, std: safeStd, min, max };
-        
-        return normalized;
-    }
+    async handleFileUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
 
-    /**
-     * Denormalize predictions back to original scale
-     * @param {tf.Tensor} predictions - Normalized predictions
-     * @returns {tf.Tensor} Denormalized predictions
-     */
-    denormalize(predictions) {
-        return predictions.mul(this.dataStats.std).add(this.dataStats.mean);
-    }
+        this.showStatus('Loading CSV file...', 'info');
+        this.clearError();
 
-    /**
-     * Train the model
-     * @param {tf.Tensor} xTrain - Training features
-     * @param {tf.Tensor} yTrain - Training labels
-     * @param {tf.Tensor} xVal - Validation features
-     * @param {tf.Tensor} yVal - Validation labels
-     * @param {number} epochs - Number of training epochs
-     * @param {Function} onEpochEnd - Callback after each epoch
-     * @returns {Promise} Training history
-     */
-    async train(xTrain, yTrain, xVal, yVal, epochs = 50, onEpochEnd = null) {
-        if (this.isTraining) {
-            throw new Error('Model is already training');
-        }
-        
-        this.isTraining = true;
-        this.history = { loss: [], val_loss: [], epochs: [] };
-        
         try {
-            const batchSize = Math.min(32, xTrain.shape[0]);
-            
-            const history = await this.model.fit(xTrain, yTrain, {
-                epochs: epochs,
-                batchSize: batchSize,
-                validationData: [xVal, yVal],
-                callbacks: {
-                    onEpochEnd: async (epoch, logs) => {
-                        // Store history
-                        this.history.loss.push(logs.loss);
-                        this.history.val_loss.push(logs.val_loss);
-                        this.history.epochs.push(epoch + 1);
-                        
-                        // Call user callback if provided
-                        if (onEpochEnd) {
-                            onEpochEnd(epoch, logs);
-                        }
-                        
-                        // Force garbage collection periodically
-                        if (epoch % 5 === 0) {
-                            tf.engine().startScope();
-                            tf.engine().endScope();
-                        }
-                    }
-                }
-            });
-            
-            this.isTraining = false;
-            return history;
+            const text = await file.text();
+            this.parseCSVData(text);
+            this.ui.predictBtn.disabled = false;
         } catch (error) {
-            this.isTraining = false;
-            throw error;
+            this.showError(`Error loading file: ${error.message}`);
+            console.error(error);
         }
     }
 
     /**
-     * Predict next n days using recursive prediction
-     * @param {Array} lastSequence - Last known sequence of returns
-     * @param {number} nDays - Number of days to predict
-     * @returns {Array} Array of predicted returns
+     * Parse CSV data (expects Date,Close columns)
      */
-    predictNextDays(lastSequence, nDays = 5) {
-        if (!this.model) {
-            throw new Error('Model not trained yet');
+    parseCSVData(csvText) {
+        const lines = csvText.trim().split('\n');
+        const headers = lines[0].split(',').map(h => h.trim());
+        
+        // Find date and close price columns
+        const dateIndex = headers.findIndex(h => 
+            h.toLowerCase().includes('date'));
+        const closeIndex = headers.findIndex(h => 
+            h.toLowerCase().includes('close') || h.toLowerCase().includes('price'));
+        
+        if (dateIndex === -1 || closeIndex === -1) {
+            throw new Error('CSV must contain Date and Close columns');
         }
-        
-        const predictions = [];
-        let currentSequence = [...lastSequence];
-        
-        for (let i = 0; i < nDays; i++) {
-            // Prepare input tensor
-            const inputTensor = tf.tensor3d(
-                [currentSequence.map(val => [val])],
-                [1, currentSequence.length, 1]
-            );
-            
-            // Make prediction
-            const prediction = this.model.predict(inputTensor);
-            const predValue = prediction.dataSync()[0];
-            
-            // Denormalize prediction
-            const denormPred = predValue * this.dataStats.std + this.dataStats.mean;
-            predictions.push(denormPred);
-            
-            // Update sequence for next prediction
-            currentSequence.shift();
-            currentSequence.push(predValue);
-            
-            // Clean up tensors
-            inputTensor.dispose();
-            prediction.dispose();
-        }
-        
-        return predictions;
-    }
 
-    /**
-     * Make predictions on test data
-     * @param {tf.Tensor} xTest - Test features
-     * @returns {Array} Predictions
-     */
-    predict(xTest) {
-        if (!this.model) {
-            throw new Error('Model not trained yet');
-        }
-        
-        const predictions = this.model.predict(xTest);
-        const denormPredictions = this.denormalize(predictions);
-        const result = denormPredictions.arraySync();
-        
-        predictions.dispose();
-        denormPredictions.dispose();
-        
-        return result.flat();
-    }
-
-    /**
-     * Calculate RMSE between predictions and actual values
-     * @param {Array} predictions - Predicted values
-     * @param {Array} actual - Actual values
-     * @returns {number} RMSE value
-     */
-    calculateRMSE(predictions, actual) {
-        if (predictions.length !== actual.length) {
-            throw new Error('Predictions and actual arrays must have same length');
-        }
-        
-        let sumSquaredError = 0;
-        for (let i = 0; i < predictions.length; i++) {
-            const error = predictions[i] - actual[i];
-            sumSquaredError += error * error;
-        }
-        
-        return Math.sqrt(sumSquaredError / predictions.length);
-    }
-
-    /**
-     * Generate synthetic S&P 500 returns data for demonstration
-     * @param {number} nDays - Number of days to generate
-     * @returns {Object} Generated data with dates and returns
-     */
-    generateSyntheticData(nDays = 750) {
         const dates = [];
-        const prices = [4000]; // Start at 4000
-        const returns = [];
+        const prices = [];
         
-        const startDate = new Date('2020-01-01');
-        
-        // Parameters for synthetic data generation
-        const drift = 0.0003; // Daily drift
-        const volatility = 0.012; // Daily volatility
-        const seasonality = 0.001; // Small seasonal component
-        
-        for (let i = 0; i < nDays; i++) {
-            const currentDate = new Date(startDate);
-            currentDate.setDate(startDate.getDate() + i);
-            dates.push(currentDate.toISOString().split('T')[0]);
-            
-            if (i > 0) {
-                // Generate random walk with drift and seasonality
-                const dayOfYear = currentDate.getDayOfYear ? currentDate.getDayOfYear() : 
-                                 (currentDate - new Date(currentDate.getFullYear(), 0, 0)) / 86400000;
-                const seasonal = Math.sin(2 * Math.PI * dayOfYear / 365) * seasonality;
-                
-                const randomShock = (Math.random() - 0.5) * volatility;
-                const dailyReturn = drift + seasonal + randomShock;
-                
-                returns.push(dailyReturn);
-                prices.push(prices[i - 1] * (1 + dailyReturn));
+        for (let i = 1; i < lines.length; i++) {
+            const cells = lines[i].split(',').map(c => c.trim());
+            if (cells.length >= Math.max(dateIndex, closeIndex) + 1) {
+                dates.push(cells[dateIndex]);
+                prices.push(parseFloat(cells[closeIndex]));
             }
         }
-        
-        // Remove the first price since we don't have return for it
-        prices.shift();
-        
-        return {
+
+        // Calculate returns
+        const returns = [];
+        for (let i = 1; i < prices.length; i++) {
+            const ret = (prices[i] - prices[i-1]) / prices[i-1];
+            returns.push(ret);
+        }
+
+        this.data = {
             dates: dates.slice(1), // Remove first date since no return
-            prices: prices,
+            prices: prices.slice(1),
             returns: returns
         };
+
+        this.showStatus(`Loaded ${returns.length} days of return data`, 'success');
+        this.updateDataStats();
     }
 
     /**
-     * Clean up model and tensors from memory
+     * Generate synthetic S&P 500 data
      */
-    dispose() {
-        if (this.model) {
-            this.model.dispose();
-            this.model = null;
-        }
-        this.history = { loss: [], val_loss: [], epochs: [] };
-        tf.engine().startScope();
-        tf.engine().endScope();
+    generateData() {
+        this.showStatus('Generating synthetic S&P 500 data...', 'info');
+        
+        // Generate 3 years of data (~750 trading days)
+        this.data = this.model.generateSyntheticData(750);
+        
+        this.ui.predictBtn.disabled = false;
+        this.showStatus(`Generated ${this.data.returns.length} days of synthetic return data`, 'success');
+        this.updateDataStats();
+        
+        // Plot the generated data
+        this.plotGeneratedData();
     }
 
     /**
-     * Get model summary
-     * @returns {string} Model architecture summary
+     * Plot generated synthetic data
      */
-    getSummary() {
-        if (!this.model) {
-            return 'Model not built yet';
-        }
-        
-        let summary = 'Model Layers:\n';
-        this.model.layers.forEach((layer, i) => {
-            summary += `${i + 1}. ${layer.name} (${layer.getClassName()})\n`;
-        });
-        
-        return summary;
-    }
-}
+    plotGeneratedData() {
+        const trace1 = {
+            x: this.data.dates.filter((_, i) => i % 10 === 0), // Sample every 10th date
+            y: this.data.returns.filter((_, i) => i % 10 === 0).map(r => r * 100), // Convert to percentage
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Daily Returns (%)',
+            line: { color: '#ff2e63', width: 2 }
+        };
 
-// Export the class for use in other modules
-export { GRUModel };
+        const layout = {
+            title: 'Synthetic S&P 500 Daily Returns',
+            plot_bgcolor: '#1a1a1a',
+            paper_bgcolor: '#1a1a1a',
+            font: { color: '#ffffff' },
+            xaxis: { 
+                title: 'Date',
+                gridcolor: '#333333',
+                zerolinecolor: '#333333'
+            },
+            yaxis: { 
+                title: 'Return (%)',
+                gridcolor: '#333333',
+                zerolinecolor: '#333333'
+            },
+            showlegend: true,
+            legend: { 
+                x: 0.01, 
+                xanchor: 'left',
+                y: 0.99,
+                yanchor: 'top',
+                bgcolor: 'rgba(0,0,0,0.5)'
+            }
+        };
+
+        Plotly.newPlot(this.ui.predictionPlot, [trace1], layout);
+    }
+
+    /**
+     * Update data statistics display
+     */
+    updateDataStats() {
+        if (!this.data || !this.data.returns.length) return;
+
+        const returns = this.data.returns;
+        const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+        const std = Math.sqrt(returns.reduce((sq, n) => sq + Math.pow(n - mean, 2), 0) / returns.length);
+        
+        this.ui.trainSamples.textContent = Math.floor(returns.length * 0.7).toLocaleString();
+        this.ui.valSamples.textContent = Math.floor(returns.length * 0.15).toLocaleString();
+    }
+
+    /**
+     * Prepare data for training
+     */
+    prepareData() {
+        if (!this.data || !this.data.returns.length) {
+            throw new Error('No data loaded. Please upload or generate data first.');
+        }
+
+        const sequenceLength = parseInt(this.ui.seqLength.value);
+        const trainRatio = parseFloat(this.ui.trainRatio.value);
+        
+        // Normalize returns
+        const returnsTensor = tf.tensor1d(this.data.returns);
+        this.normalizedReturns = this.model.normalizeData(returnsTensor);
+        const normalizedArray = this.normalizedReturns.arraySync();
+        
+        returnsTensor.dispose();
+
+        // Create sequences
+        this.sequences = this.model.createSequences(normalizedArray, sequenceLength);
+        
+        // Split data
+        const totalSamples = this.sequences.xs.shape[0];
+        const trainEnd = Math.floor(totalSamples * trainRatio);
+        const valEnd = Math.floor(totalSamples * (trainRatio + (1 - trainRatio) / 2));
+        
+        // Training data
+        const xTrain = this.sequences.xs.slice([0, 0, 0], [trainEnd, sequenceLength, 1]);
+        const yTrain = this.sequences.ys.slice([0, 0], [trainEnd, 1]);
+        
+        // Validation data
+        const xVal = this.sequences.xs.slice([trainEnd, 0, 0], [valEnd - trainEnd, sequenceLength, 1]);
+        const yVal = this.sequences.ys.slice([trainEnd, 0], [valEnd - trainEnd, 1]);
+        
+        // Test data (last part)
+        const xTest = this.sequences.xs.slice([valEnd, 
