@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser-Based S&P 500 Prediction</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.1.min.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0a0a0a;
+            --bg-card: #1a1a1a;
+            --text-primary: #ffffff;
+            --text-secondary: #b3b3b3;
+            --accent-rose: #ff4d8d;
+            --accent-purple: #9d4edd;
+            --accent-teal: #4ecdc4;
+            --border-color: #333333;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-gap: 30px;
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .card {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 25px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 25px;
+            border-bottom: 2px solid var(--accent-rose);
+            padding-bottom: 15px;
+        }
+        
+        .card-header h2 {
+            color: var(--accent-rose);
+            font-size: 1.5rem;
+            margin-right: 15px;
+        }
+        
+        .card-header .icon {
+            font-size: 1.8rem;
+            margin-right: 10px;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, var(--accent-rose), var(--accent-purple));
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 77, 141, 0.4);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: var(--border-color);
+        }
+        
+        .btn-secondary:hover {
+            background: #444;
+            box-shadow: 0 6px 20px rgba(255, 255, 255, 0.1);
+        }
+        
+        .file-upload {
+            margin-bottom: 20px;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .file-label {
+            display: block;
+            padding: 15px;
+            border: 2px dashed var(--border-color);
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .file-label:hover {
+            border-color: var(--accent-rose);
+            background-color: rgba(255, 77, 141, 0.05);
+        }
+        
+        .status-box {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            border-left: 4px solid var(--accent-teal);
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .status-item {
+            margin-bottom: 5px;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .status-item.success {
+            color: var(--accent-teal);
+        }
+        
+        .status-item.error {
+            color: #ff6b6b;
+        }
+        
+        .status-item.warning {
+            color: #ffd93d;
+        }
+        
+        .status-item.info {
+            color: #4dabf7;
+        }
+        
+        .progress-container {
+            margin: 20px 0;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background-color: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-rose), var(--accent-purple));
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        
+        .chart-container {
+            height: 400px;
+            margin-top: 20px;
+        }
+        
+        .grid-controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .control-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .control-input {
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            color: var(--text-primary);
+            font-size: 1rem;
+        }
+        
+        .control-input:focus {
+            outline: none;
+            border-color: var(--accent-rose);
+        }
+        
+        .prediction-result {
+            background: linear-gradient(135deg, rgba(255, 77, 141, 0.1), rgba(157, 78, 221, 0.1));
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            border: 1px solid rgba(255, 77, 141, 0.3);
+        }
+        
+        .prediction-title {
+            color: var(--accent-rose);
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .prediction-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin: 10px 0;
+            text-align: center;
+        }
+        
+        .prediction-value.positive {
+            color: var(--accent-teal);
+        }
+        
+        .prediction-value.negative {
+            color: #ff6b6b;
+        }
+        
+        .prediction-details {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .detail-item {
+            text-align: center;
+            padding: 10px;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+        
+        .detail-label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+        }
+        
+        .detail-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        
+        .loader {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--accent-rose);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .model-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .stat-item {
+            padding: 10px;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+        
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1 style="color: var(--accent-rose); margin-bottom: 10px;">📈 Browser-Based S&P 500 Prediction</h1>
+        <p style="color: var(--text-secondary); margin-bottom: 30px;">
+            Client-side machine learning using TensorFlow.js • Predicts 5-day forward returns • No server required
+        </p>
+    </header>
+    
+    <div class="container">
+        <!-- Left Column: Data & Training -->
+        <div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="icon">📁</div>
+                    <h2>Data Input</h2>
+                </div>
+                
+                <div class="file-upload">
+                    <input type="file" id="csvFile" class="file-input" accept=".csv">
+                    <label for="csvFile" class="file-label">
+                        <div style="font-size: 3rem; margin-bottom: 10px;">📤</div>
+                        <div>Upload Yahoo Finance CSV Export</div>
+                        <div style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px;">
+                            Expected columns: Date, SPX, VIX, SPY, TNX, DXY, SPY_Volume
+                        </div>
+                    </label>
+                </div>
+                
+                <div class="grid-controls">
+                    <div class="control-group">
+                        <label class="control-label">Lookback Period (days)</label>
+                        <input type="number" id="lookbackInput" class="control-input" value="60" min="10" max="200">
+                    </div>
+                    <div class="control-group">
+                        <label class="control-label">Training Epochs</label>
+                        <input type="number" id="epochsInput" class="control-input" value="50" min="10" max="200">
+                    </div>
+                    <div class="control-group">
+                        <label class="control-label">Batch Size</label>
+                        <input type="number" id="batchSizeInput" class="control-input" value="32" min="8" max="128">
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button id="trainBtn" class="btn">
+                        <span id="trainIcon">🤖</span>
+                        <span>Train Model</span>
+                    </button>
+                    <button id="predictBtn" class="btn btn-secondary" disabled>
+                        <span id="predictIcon">🔮</span>
+                        <span>Predict Next 5 Days</span>
+                    </button>
+                    <button id="resetBtn" class="btn btn-secondary">
+                        <span>🔄</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="card" style="margin-top: 30px;">
+                <div class="card-header">
+                    <div class="icon">📊</div>
+                    <h2>Training Progress</h2>
+                </div>
+                
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div class="progress-text">
+                        <span id="progressStatus">Ready</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                </div>
+                
+                <div id="statusBox" class="status-box">
+                    <div class="status-item info">Waiting for data upload...</div>
+                </div>
+                
+                <div class="model-stats">
+                    <div class="stat-item">
+                        <div class="stat-label">Model Parameters</div>
+                        <div id="paramCount" class="stat-value">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Training Samples</div>
+                        <div id="trainSamples" class="stat-value">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Validation Samples</div>
+                        <div id="valSamples" class="stat-value">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Test RMSE</div>
+                        <div id="testRmse" class="stat-value">-</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Right Column: Visualization & Results -->
+        <div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="icon">📉</div>
+                    <h2>Training & Validation Loss</h2>
+                </div>
+                <div id="lossChart" class="chart-container"></div>
+            </div>
+            
+            <div class="card" style="margin-top: 30px;">
+                <div class="card-header">
+                    <div class="icon">🔮</div>
+                    <h2>5-Day Forward Prediction</h2>
+                </div>
+                
+                <div id="predictionResult" class="prediction-result" style="display: none;">
+                    <div class="prediction-title">
+                        <span>📈</span>
+                        <span>Predicted S&P 500 Return (Next 5 Days)</span>
+                    </div>
+                    <div id="predictionValue" class="prediction-value">0.00%</div>
+                    
+                    <div class="prediction-details">
+                        <div class="detail-item">
+                            <div class="detail-label">Current SPX</div>
+                            <div id="currentSpx" class="detail-value">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Predicted SPX</div>
+                            <div id="predictedSpx" class="detail-value">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Confidence</div>
+                            <div id="predictionConfidence" class="detail-value">-</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="predictionChart" class="chart-container" style="display: none;"></div>
+                
+                <div style="margin-top: 20px; color: var(--text-secondary); font-size: 0.9rem;">
+                    <p><strong>Note:</strong> This model predicts the 5-day logarithmic forward return of the S&P 500 index using historical data and technical indicators.</p>
+                    <p style="margin-top: 10px;">The prediction is based on a GRU neural network trained entirely in your browser. No data is sent to any server.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <p>© 2024 Browser ML Stock Prediction • Powered by TensorFlow.js • Deployable on GitHub Pages</p>
+        <p style="margin-top: 5px; font-size: 0.8rem;">All computations happen client-side • No data leaves your browser</p>
+    </div>
+    
+    <script src="gru.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
